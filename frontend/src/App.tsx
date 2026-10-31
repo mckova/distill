@@ -50,7 +50,13 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <span className="brand">Distill</span>
-        <nav className="pills" aria-label="Main">
+        <nav className="pills" aria-label="Main" onMouseMove={(e) => {
+          // Hover-to-scroll: the bar follows the pointer, no scrollbar and no click needed.
+          const el = e.currentTarget; const max = el.scrollWidth - el.clientWidth;
+          if (max <= 0) return;
+          const r = el.getBoundingClientRect();
+          el.scrollLeft = Math.min(1, Math.max(0, (e.clientX - r.left - 40) / (r.width - 80))) * max;
+        }}>
           {NAV.map(({ id, label }) => (
             <button key={id} className="pill" aria-current={page === id ? "page" : undefined} onClick={() => ctx.go(id)}>{label}</button>
           ))}
