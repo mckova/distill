@@ -165,3 +165,11 @@ export function EvidenceChart({ evidence }: { evidence: Json }) {
     }
   }, [evidence]);
 }
+
+/** A line without axes, for scanning a trend at a glance. */
+export function Spark({ values, tone }: { values: number[]; tone?: "bad" }) {
+  if (values.length < 2) return null;
+  const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+  const d = values.map((v, i) => `${i ? "L" : "M"}${((i / (values.length - 1)) * 112).toFixed(1)},${(34 - ((v - min) / span) * 30).toFixed(1)}`).join("");
+  return <svg className={tone ? `spark ${tone}` : "spark"} viewBox="0 0 112 38" aria-hidden><path d={d} /></svg>;
+}

@@ -100,3 +100,11 @@ def test_delete_source_cascades(demo):
     src = demo.get("/api/sources").json()[0]
     assert demo.delete(f"/api/sources/{src['id']}").status_code == 204
     assert demo.get("/api/datasets").json() == [] and demo.get("/api/insights").json() == []
+
+
+def test_postgres_urls_are_normalised():
+    from distill.db import normalize_url
+    assert normalize_url("postgres://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert normalize_url("postgresql://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
+    assert normalize_url("postgresql+psycopg://u@h/db") == "postgresql+psycopg://u@h/db"
+    assert normalize_url("sqlite:///x.db") == "sqlite:///x.db"

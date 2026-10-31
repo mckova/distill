@@ -1,78 +1,80 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type Automation, type Dataset, type Insight, type Json, type Source } from "./api";
 import { AgentBriefing, Ask, type AiInfo } from "./ai";
-import { EvidenceChart, HBar } from "./charts";
+import { EvidenceChart, HBar, Spark } from "./charts";
 import { ProcessMap } from "./ProcessMap";
 import { fmtHoursWk, KIND_LABEL, LearningPage, Optimize, Skills } from "./studio";
 import { ConfirmButton, Dialog, Empty, fmtMoney, Header, Ledger, Md, NA, plural, Skeleton, Steps, Tag, timeAgo, useAsync } from "./ui";
 
-type Page = "brief" | "ask" | "findings" | "process" | "optimize" | "automations" | "skills" | "sources" | "learning";
+type Page = "home" | "findings" | "ask" | "process" | "optimize" | "automations" | "skills" | "sources" | "learning";
 
-const NAV: { group: string; items: { id: Page; label: string }[] }[] = [
-  { group: "", items: [{ id: "brief", label: "Brief" }, { id: "ask", label: "Ask" }] },
-  { group: "Understand", items: [{ id: "findings", label: "Findings" }, { id: "process", label: "Process" }, { id: "optimize", label: "Optimize" }] },
-  { group: "Act", items: [{ id: "automations", label: "Automations" }, { id: "skills", label: "Skills" }] },
-  { group: "Setup", items: [{ id: "sources", label: "Sources" }, { id: "learning", label: "Learning" }] },
+const NAV: { id: Page; label: string }[] = [
+  { id: "home", label: "Home" }, { id: "findings", label: "Findings" }, { id: "ask", label: "Ask" },
+  { id: "process", label: "Process" }, { id: "optimize", label: "Optimize" }, { id: "automations", label: "Automations" },
+  { id: "skills", label: "Skills" }, { id: "sources", label: "Sources" }, { id: "learning", label: "Learning" },
 ];
-const PAGES = NAV.flatMap((g) => g.items.map((i) => i.id));
+const PAGES = NAV.map((n) => n.id);
+const SHEET = new Set<Page>(["process", "optimize", "automations", "skills", "sources", "learning"]);
 
 const ACTIONABLE = new Set(["segment_driver", "trend", "anomaly", "concentration", "bottleneck", "automation_candidate", "rework", "data_quality"]);
 
-type Ctx = { notify: (m: string) => void; go: (p: Page, prompt?: string) => void; bump: () => void; ai: AiInfo | null; counts: Record<string, number> };
+type Ctx = { notify: (m: string) => void; go: (p: Page, prompt?: string, focus?: number) => void; bump: () => void; ai: AiInfo | null; focus: number | null };
+
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 export default function App() {
   const initial = location.hash.slice(1) as Page;
-  const [page, setPage] = useState<Page>(PAGES.includes(initial) ? initial : "brief");
+  const [page, setPage] = useState<Page>(PAGES.includes(initial) ? initial : "home");
   const [prompt, setPrompt] = useState<string | undefined>();
+  const [focus, setFocus] = useState<number | null>(null);
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const [version, setVersion] = useState(0);
+  const searchRef = useRef<HTMLInputElement>(null);
   const ai = useAsync(api.ai).data;
-  const insights = useAsync(() => api.insights(), [version, page]);
-  const autos = useAsync(api.automations, [version, page]);
-  const skills = useAsync(api.skills, [version, page]);
-  const counts = {
-    findings: insights.data?.filter((i) => i.status === "new").length ?? 0,
-    automations: autos.data?.length ?? 0,
-    skills: skills.data?.length ?? 0,
-  };
   const ctx: Ctx = {
-    ai, counts,
+    ai, focus,
     bump: () => setVersion((v) => v + 1),
     notify: (text) => { const id = Date.now(); setToast({ id, text }); setTimeout(() => setToast((t) => (t?.id === id ? null : t)), 3600); },
-    go: (p, q) => { setPrompt(q); location.hash = p; setPage(p); },
+    go: (p, q, f) => { setPrompt(q); setFocus(f ?? null); location.hash = p; setPage(p); window.scrollTo({ top: 0 }); },
   };
-  useEffect(() => { document.title = `${NAV.flatMap((g) => g.items).find((i) => i.id === page)?.label} · Distill`; }, [page]);
+  useEffect(() => { document.title = `${NAV.find((n) => n.id === page)?.label} · Distill`; }, [page]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); searchRef.current?.focus(); }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="shell">
-      <nav className="side" aria-label="Main">
-        <div className="brand">
-          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden className="mark"><path d="M2 2h14L10.5 9.5V15l-3 1.5V9.5z" /></svg>
-          Distill
-        </div>
-        {NAV.map((g) => (
-          <div key={g.group || "top"} className="nav-group">
-            {g.group && <span className="nav-label">{g.group}</span>}
-            {g.items.map(({ id, label }) => (
-              <button key={id} className="nav" aria-current={page === id ? "page" : undefined} onClick={() => ctx.go(id)}>
-                <span>{label}</span>
-                {counts[id as keyof typeof counts] ? <span className="nav-count num">{counts[id as keyof typeof counts]}</span> : null}
-              </button>
-            ))}
-          </div>
-        ))}
-        <div className="side-foot">
+      <header className="topbar">
+        <span className="brand">Distill</span>
+        <nav className="pills" aria-label="Main">
+          {NAV.map(({ id, label }) => (
+            <button key={id} className="pill" aria-current={page === id ? "page" : undefined} onClick={() => ctx.go(id)}>{label}</button>
+          ))}
+        </nav>
+        <div className="topright">
           <span className={ai?.enabled ? "status on" : "status"} title={ai?.capabilities.join(", ")}>
             <span className="status-dot" aria-hidden />
-            {ai ? (ai.enabled ? `Claude connected` : "Claude not connected") : "Checking…"}
+            {ai ? (ai.enabled ? "Claude connected" : "Claude not connected") : "Checking…"}
           </span>
-          {ai?.enabled && <span className="status-model">{ai.model}</span>}
+          <form className="search" role="search" onSubmit={(e) => {
+            e.preventDefault();
+            const q = searchRef.current?.value.trim();
+            if (q) { ctx.go("ask", q); if (searchRef.current) searchRef.current.value = ""; }
+          }}>
+            <label htmlFor="search-q" className="sr-only">Ask Claude about your data</label>
+            <input id="search-q" ref={searchRef} placeholder="Ask Claude about your data" autoComplete="off" />
+            <kbd aria-hidden>{isMac ? "⌘K" : "Ctrl K"}</kbd>
+          </form>
         </div>
-      </nav>
-      <main key={version} className={page === "ask" ? "main bleed" : "main"}>
-        {page === "brief" && <Brief {...ctx} />}
-        {page === "ask" && <Ask ai={ai} notify={ctx.notify} initial={prompt} />}
+      </header>
+      <main key={version} className={page === "ask" ? "main bleed" : SHEET.has(page) ? "main sheet" : "main"}>
+        {page === "home" && <Home {...ctx} />}
         {page === "findings" && <Findings {...ctx} />}
+        {page === "ask" && <Ask ai={ai} notify={ctx.notify} initial={prompt} />}
         {page === "process" && <Process />}
         {page === "optimize" && <Optimize notify={ctx.notify} />}
         {page === "automations" && <Automations {...ctx} />}
@@ -93,16 +95,14 @@ function NoData({ go }: { go: Ctx["go"] }) {
   </Empty>;
 }
 
-const today = () => new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+// --------------------------------------------------------------------------- home
 
-// --------------------------------------------------------------------------- brief
-
-function Brief({ go, notify, bump, ai }: Ctx) {
+function Home({ go, notify, bump, ai }: Ctx) {
   const datasets = useAsync(api.datasets);
   const insights = useAsync(() => api.insights());
   const learning = useAsync(api.learning);
   const opt = useAsync(api.optimization);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<number | "demo" | null>(null);
 
   if (datasets.data && datasets.data.length === 0) {
     return (
@@ -110,11 +110,11 @@ function Brief({ go, notify, bump, ai }: Ctx) {
         <h1>Point Distill at your company’s data.</h1>
         <p className="lede">It profiles every table, finds what changed and what is slow, writes the playbooks your agents need, and turns each finding into an automation you can switch on.</p>
         <div className="row">
-          <button className="primary" disabled={busy} onClick={async () => {
-            setBusy(true);
+          <button className="primary" disabled={busy === "demo"} onClick={async () => {
+            setBusy("demo");
             try { const r = await api.demo(); notify(`Demo company loaded with ${r.insights} findings`); bump(); }
-            catch (e) { notify(String(e)); } finally { setBusy(false); }
-          }}>{busy ? "Loading…" : "Load the demo company"}</button>
+            catch (e) { notify(String(e)); } finally { setBusy(null); }
+          }}>{busy === "demo" ? "Loading…" : "Load the demo company"}</button>
           <button className="ghost" onClick={() => go("sources")}>Connect my own data</button>
         </div>
         <p className="fine">The demo is 120 days of orders and support tickets from a small online retailer, with a regional slump, a slow hand-off and a manual copy-paste step hidden in it.</p>
@@ -123,73 +123,93 @@ function Brief({ go, notify, bump, ai }: Ctx) {
   }
 
   const rows = (datasets.data ?? []).reduce((s, d) => s + d.rows, 0);
-  const open = (insights.data ?? []).filter((i) => i.status === "new");
   const o = opt.data;
+  const byId = new Map((insights.data ?? []).map((i) => [i.id, i]));
+  const open = (insights.data ?? []).filter((i) => i.status === "new");
+  const pending = (o?.opportunities ?? []).filter((x) => !x.automated);
+  const top = [...pending, ...(o?.opportunities ?? []).filter((x) => x.automated)].slice(0, 3);
+  const decide = top.length;
+
   return (
     <>
-      <Header sub={`${today()}. Read from ${plural(rows, "record")} in ${plural(datasets.data?.length ?? 0, "dataset")}.`}
-        title={insights.data
-          ? (open[0] ? <>{plural(open.length, "finding")} to review. <span className="ink-2">Start here: {open[0].title}.</span></> : "Nothing needs attention right now.")
-          : <Skeleton w="70%" h={30} />} />
-      <div className="split">
-        <section aria-labelledby="h-changed">
-          <div className="section-bar"><h2 id="h-changed">What needs attention</h2><button className="link" onClick={() => go("findings")}>All findings</button></div>
-          {!insights.data && <Skeleton lines={6} />}
-          <ol className="findings-list">
-            {open.slice(0, 6).map((i, n) => (
-              <li key={i.id}>
-                <span className="idx num" aria-label={`Rank ${n + 1}`}>{n + 1}</span>
-                <div className="f-body">
-                  <span className={`kind k-${i.kind}`}>{KIND_LABEL[i.kind] ?? i.kind}</span>
-                  <button className="f-title" onClick={() => go("findings")}>{i.title}</button>
-                  <p className="f-text">{i.body}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
-        <aside className="rail" aria-label="Agent">
-          <AgentBriefing ai={ai} notify={notify} onDone={() => { insights.reload(); learning.reload(); }} />
-          <form className="quick-ask" onSubmit={(e) => {
-            e.preventDefault();
-            const q = new FormData(e.currentTarget).get("q") as string;
-            if (q.trim()) go("ask", q.trim());
-          }}>
-            <label htmlFor="quick-q">Ask a question about this data</label>
-            <div className="row tight">
-              <input id="quick-q" name="q" placeholder="Why did North drop in September?" />
-              <button className="primary">Ask</button>
-            </div>
-          </form>
-        </aside>
+      <div className="hero">
+        <div>
+          {o && insights.data
+            ? <h1>{decide ? <>{plural(decide, "thing")} {decide === 1 ? "needs" : "need"} <b>your decision</b> this week.</> : "Nothing needs a decision right now."}</h1>
+            : <Skeleton w="70%" h={36} />}
+          <p className="digest">
+            Distill read <b>{plural(rows, "record")}</b> in {plural(datasets.data?.length ?? 0, "dataset")}.{" "}
+            {insights.data && <>{plural(open.length, "finding")} {open.length === 1 ? "is" : "are"} open{learning.data ? `, and ${plural(learning.data.automations_enabled, "automation")} ${learning.data.automations_enabled === 1 ? "is" : "are"} running` : ""}. </>}
+            The ones below carry most of the cost.
+          </p>
+        </div>
+        <div className="stake">
+          <div className="stake-label">At stake every week</div>
+          <Ledger items={[
+            { label: "Customers waiting", value: o ? fmtHoursWk(o.wait_hours_per_week) : null },
+            { label: "Staff time", value: o ? `${o.staff_hours_per_week} h/wk` : null, tone: "good" },
+            { label: "Revenue at risk", value: o ? `${fmtMoney(o.total_revenue_at_risk_per_week)}/wk` : null, tone: "warn" },
+          ]} />
+        </div>
       </div>
-      <section aria-labelledby="h-opps">
-        <div className="section-bar"><h2 id="h-opps">Where the time and money go</h2><button className="link" onClick={() => go("optimize")}>Full breakdown</button></div>
-        <Ledger items={[
-        { label: "Staff time automatable", value: o ? `${o.staff_hours_per_week} h/wk` : null, tone: "good" },
-        { label: "Case waiting removable", value: o ? fmtHoursWk(o.wait_hours_per_week) : null },
-        { label: "Revenue at risk", value: o ? `${fmtMoney(o.total_revenue_at_risk_per_week)}/wk` : null, tone: "warn" },
-      ]} />
-        {!o && <Skeleton lines={4} />}
-        {o && (
-          <table className="table">
-            <thead><tr><th>Opportunity</th><th className="r">Per week</th></tr></thead>
-            <tbody>
-              {o.opportunities.slice(0, 5).map((x) => (
-                <tr key={`${x.kind}${x.insight_id}`}>
-                  <td><span className="cell-title">{x.title}</span><span className="cell-sub">{x.detail}</span></td>
-                  <td className="r num nowrap">{x.revenue_at_risk_per_week ? `${fmtMoney(x.revenue_at_risk_per_week)} at risk` : `${fmtHoursWk(x.hours_per_week)} ${x.unit === "staff" ? "staff" : "waiting"}`}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+
+      <section aria-labelledby="h-decide">
+        <div className="section-bar"><h2 id="h-decide">Needs your decision</h2><button className="link" onClick={() => go("findings")}>All {open.length} findings</button></div>
+        {!o && <Skeleton lines={5} />}
+        <div className="decisions">
+          {top.map((x) => {
+            const ins = byId.get(x.insight_id);
+            const revenue = x.unit === "revenue";
+            const series: number[] | null = ins?.evidence.chart === "line" && Array.isArray(ins.evidence.series) ? ins.evidence.series.map((p: Json) => p.value) : null;
+            return (
+              <article key={`${x.kind}${x.insight_id}`} className="card">
+                <span className="kind">{ins ? (KIND_LABEL[ins.kind] ?? ins.kind) : x.kind.replace(/_/g, " ")} · {x.dataset}</span>
+                <h3>{x.title}</h3>
+                <div className="card-impact">
+                  <div>
+                    <b className={`num ${revenue ? "bad" : ""}`}>{revenue ? fmtMoney(x.revenue_at_risk_per_week ?? 0) : `${Math.round(x.hours_per_week).toLocaleString()} h`}</b>
+                    <small>{revenue ? "revenue at risk a week" : x.unit === "staff" ? "staff time a week" : "waiting a week"}</small>
+                  </div>
+                  {series && <Spark values={series} tone={revenue ? "bad" : undefined} />}
+                </div>
+                <p className="card-why">{x.detail}</p>
+                <div className="row">
+                  {x.automated
+                    ? <button className="primary" onClick={() => go("automations")}>Review automation</button>
+                    : revenue
+                      ? <button className="primary" onClick={() => go("ask", `Why is this happening, and what should we do about it? ${x.title}`, x.insight_id)}>Investigate with Claude</button>
+                      : <button className="primary" disabled={busy === x.insight_id} onClick={async () => {
+                          setBusy(x.insight_id);
+                          try { await api.automate(x.insight_id); notify("Automation drafted. It stays off until you switch it on."); opt.reload(); }
+                          catch (e) { notify(String((e as Error).message)); } finally { setBusy(null); }
+                        }}>{busy === x.insight_id ? "Drafting…" : "Draft automation"}</button>}
+                  <button className="ghost" onClick={() => go("findings", undefined, x.insight_id)}>Open finding</button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="review" aria-label="Claude’s review">
+        <AgentBriefing ai={ai} notify={notify} onDone={() => { insights.reload(); learning.reload(); opt.reload(); }} />
+      </section>
+
+      <section aria-labelledby="h-watch" style={{ marginTop: "var(--sp-10)" }}>
+        <div className="section-bar"><h2 id="h-watch">What Distill is watching</h2><button className="link" onClick={() => go("sources")}>Sources</button></div>
+        <div className="watching">
+          <div className="tile"><div className="tile-label">Records read</div><div className="tile-value num">{datasets.data ? rows.toLocaleString() : "…"}</div></div>
+          <div className="tile"><div className="tile-label">Datasets</div><div className="tile-value num">{datasets.data ? datasets.data.length : "…"}</div></div>
+          <div className="tile"><div className="tile-label">Automations running</div><div className="tile-value num">{learning.data ? learning.data.automations_enabled : "…"}</div></div>
+          <div className="tile"><div className="tile-label">Saved by automations</div><div className="tile-value num">{learning.data ? `${(learning.data.minutes_saved_per_week / 60).toFixed(1)} h/wk` : "…"}</div></div>
+        </div>
       </section>
     </>
   );
 }
 
-// --------------------------------------------------------------------------- findings (master-detail)
+
+// --------------------------------------------------------------------------- findings (list + panel)
 
 function FindingDetail({ insight, notify, onChange, go }:
   { insight: Insight; notify: (m: string) => void; onChange: () => void; go: Ctx["go"] }) {
@@ -266,12 +286,15 @@ function EvidenceFacts({ evidence }: { evidence: Json }) {
   );
 }
 
-function Findings({ notify, go }: Ctx) {
+
+function Findings({ notify, go, focus }: Ctx) {
   const datasets = useAsync(api.datasets);
   const [showDismissed, setShowDismissed] = useState(false);
   const insights = useAsync(() => api.insights(showDismissed), [showDismissed]);
+  const opt = useAsync(api.optimization);
+  const autos = useAsync(api.automations);
   const [kind, setKind] = useState<string>("all");
-  const [sel, setSel] = useState<number | null>(null);
+  const [sel, setSel] = useState<number | null>(focus);
   const [busy, setBusy] = useState(false);
   if (datasets.data?.length === 0) return <NoData go={go} />;
   const all = insights.data ?? [];
@@ -279,40 +302,67 @@ function Findings({ notify, go }: Ctx) {
   const kinds = [...new Set(all.map((i) => i.kind))];
   const current = list.find((i) => i.id === sel) ?? list[0];
   const dsName = (id: number) => datasets.data?.find((d) => d.id === id)?.stream ?? "";
+  const cost = new Map((opt.data?.opportunities ?? []).map((x) => [x.insight_id, x]));
+  const reload = () => { insights.reload(); opt.reload(); autos.reload(); };
+  const statusOf = (i: Insight) => {
+    if (i.status === "dismissed") return { text: "Dismissed", draft: false };
+    const a = autos.data?.find((x) => x.insight_id === i.id);
+    if (a) return a.enabled ? { text: "Automated", draft: false } : { text: "Draft ready", draft: true };
+    return { text: i.status === "useful" ? "Useful" : "New", draft: false };
+  };
   return (
     <>
       <Header title="Findings" sub="Ranked by statistical strength and by what you have told Distill matters here.">
         <label className="check"><input type="checkbox" checked={showDismissed} onChange={(e) => setShowDismissed(e.target.checked)} /> Include dismissed</label>
         <button className="ghost" disabled={busy} onClick={async () => {
           setBusy(true);
-          try { for (const d of datasets.data ?? []) await api.analyze(d.id); insights.reload(); notify("Re-analysed with the latest learned settings"); }
+          try { for (const d of datasets.data ?? []) await api.analyze(d.id); reload(); notify("Re-analysed with the latest learned settings"); }
           finally { setBusy(false); }
         }}>{busy ? "Analysing…" : "Re-analyse"}</button>
       </Header>
-      <div className="filters" role="group" aria-label="Filter by type">
-        <button aria-pressed={kind === "all"} onClick={() => setKind("all")}>All <span className="num">{all.length}</span></button>
-        {kinds.map((k) => <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>{KIND_LABEL[k] ?? k} <span className="num">{all.filter((i) => i.kind === k).length}</span></button>)}
-      </div>
-      <div className="master">
-        <ul className="master-list" aria-label="Findings">
-          {!insights.data && <li><Skeleton lines={8} /></li>}
-          {list.map((i) => (
-            <li key={i.id}>
-              <button className="master-row" aria-current={current?.id === i.id ? "true" : undefined} onClick={() => setSel(i.id)}>
-                <span className="row-top"><span className={`kind k-${i.kind}`}>{KIND_LABEL[i.kind] ?? i.kind}</span><span className="muted small">{dsName(i.dataset_id)}</span></span>
-                <span className={i.status === "dismissed" ? "row-title gone" : "row-title"}>{i.title}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="master-detail">
-          {current ? <FindingDetail key={current.id} insight={current} notify={notify} onChange={insights.reload} go={go} />
-            : insights.data && <p className="muted">No findings of this type.</p>}
+      <div className="finder">
+        <section className="panel" aria-label="Findings">
+          <div className="panel-head">
+            <div className="tabs" role="group" aria-label="Filter by type">
+              <button aria-pressed={kind === "all"} onClick={() => setKind("all")}>All <span className="num">{all.length}</span></button>
+              {kinds.map((k) => <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>{KIND_LABEL[k] ?? k} <span className="num">{all.filter((i) => i.kind === k).length}</span></button>)}
+            </div>
+          </div>
+          <div className="rows-head" aria-hidden><span>Finding</span><span>Status</span><span>Cost a week</span></div>
+          {!insights.data && <Skeleton lines={8} />}
+          <ul className="rows">
+            {list.map((i) => {
+              const c = cost.get(i.id);
+              const st = statusOf(i);
+              const revenue = c?.unit === "revenue";
+              return (
+                <li key={i.id}>
+                  <button className="frow" aria-current={current?.id === i.id ? "true" : undefined} onClick={() => setSel(i.id)}>
+                    <span>
+                      <span className={i.status === "dismissed" ? "frow-title gone" : "frow-title"}>{i.title}</span>
+                      <span className="frow-sub">{KIND_LABEL[i.kind] ?? i.kind} · {dsName(i.dataset_id)}</span>
+                    </span>
+                    <span className={st.draft ? "frow-status draft" : "frow-status"}>{st.text}</span>
+                    <span className={revenue ? "frow-cost bad" : "frow-cost"}>
+                      {c ? (revenue ? <>{fmtMoney(c.revenue_at_risk_per_week ?? 0)}<small>at risk</small></>
+                        : <>{Math.round(c.hours_per_week).toLocaleString()} h<small>{c.unit === "staff" ? "staff" : "waiting"}</small></>) : NA}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {insights.data && list.length === 0 && <p className="muted">No findings of this type.</p>}
+        </section>
+        <div className="panel detail-panel">
+          {current ? <FindingDetail key={current.id} insight={current} notify={notify} onChange={reload} go={go} />
+            : insights.data && <p className="muted">Nothing selected.</p>}
         </div>
       </div>
     </>
   );
 }
+
 
 // --------------------------------------------------------------------------- process
 
@@ -541,7 +591,7 @@ function DatasetProfiles() {
   return (
     <section aria-labelledby="h-ds">
       <h2 id="h-ds">What Distill detected in each dataset</h2>
-      <div className="filters" role="group" aria-label="Dataset">
+      <div className="tabs" role="group" aria-label="Dataset">
         {datasets.data.map((d: Dataset) => (
           <button key={d.id} aria-pressed={open?.id === d.id} onClick={async () => setOpen(await api.dataset(d.id))}>
             {d.stream} <span className="num">{d.rows.toLocaleString()}</span>

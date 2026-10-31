@@ -8,7 +8,7 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 COPY backend/ backend/
-RUN pip install --no-cache-dir "./backend[llm]"
+RUN pip install --no-cache-dir "./backend[llm,postgres]"
 COPY --from=ui /ui/dist frontend/dist
 ENV DISTILL_DATABASE_URL=sqlite:////data/distill.db
 VOLUME /data

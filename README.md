@@ -9,7 +9,7 @@ every finding on request and drafts automations for a person to approve, remembe
 and rewrites the generated playbooks. Feedback on findings changes how they are ranked and how sensitive the
 detectors are.
 
-![Brief](docs/screenshots/1-brief.png)
+![Home](docs/screenshots/1-home.png)
 
 ## What it does
 
@@ -55,10 +55,20 @@ The interface follows a written design language, see [DESIGN.md](DESIGN.md). Lig
 system setting.
 
 ## Quick start
+The fastest way to see everything running, with a real PostgreSQL database:
 ```bash
-# backend
+docker compose up --build         # http://localhost:8000
+export ANTHROPIC_API_KEY=...      # optional, before the command above, enables the Claude agent
+```
+Open the page and choose **Load the demo company**: 120 days of orders and support tickets from a small online
+retailer, with a regional slump, a spike, a few dominant customers, a discount effect, a slow hand-off, a manual
+copy-paste step and duplicated records hidden in it.
+
+Without Docker:
+```bash
+# backend (SQLite by default; add the postgres extra and DISTILL_DATABASE_URL for PostgreSQL)
 cd backend && python -m venv .venv && . .venv/bin/activate
-pip install -e ".[llm,dev]"
+pip install -e ".[llm,postgres,dev]"
 export ANTHROPIC_API_KEY=...        # optional, enables the agent
 uvicorn distill.api:app --reload    # http://localhost:8000/docs
 
@@ -66,15 +76,12 @@ uvicorn distill.api:app --reload    # http://localhost:8000/docs
 cd frontend && npm install && npm run dev   # http://localhost:5173
 # or: npm run build, and the backend serves the UI at http://localhost:8000
 ```
-Choose **Load the demo company**: 120 days of orders and support tickets from a small online retailer, with a
-regional slump, a spike, a few dominant customers, a discount effect, a slow hand-off, a manual copy-paste step
-and duplicated records hidden in it. Docker: `docker build -t distill . && docker run -p 8000:8000 distill`.
-
-`DISTILL_SCHEDULER=0` turns off the background scheduler; `DISTILL_DATABASE_URL` switches SQLite for Postgres.
+`DISTILL_SCHEDULER=0` turns off the background scheduler. `DISTILL_DATABASE_URL` accepts SQLite or PostgreSQL
+(`postgresql://user:pass@host/db`).
 
 ## Tests
 ```bash
-cd backend && pytest     # 32 tests
+cd backend && pytest     # 33 tests
 ```
 They include statistical contracts (the segment-driver detector must find the planted effect in at least 17 of
 20 random companies with at most 5 spurious findings), offline tests of the agent loop, multi-turn chat, memory,
@@ -90,7 +97,7 @@ data-quality guards and the scheduler.
 
 ## Stack
 FastAPI, SQLAlchemy 2 (SQLite or Postgres), pandas and numpy, Anthropic Python SDK, React 19 with TypeScript and
-Vite, hand-drawn SVG charts and process map, IBM Plex.
+Vite, hand-drawn SVG charts and process map, Mona Sans.
 
 ## API (selected)
 `POST /api/chat`, `POST /api/autopilot`, `GET /api/briefings`, `GET|POST|DELETE /api/memory`, `GET /api/skills`,

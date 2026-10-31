@@ -20,5 +20,6 @@ Distill קורא את הדאטה התפעולי של חברה ואומר מה ה
 - **למידה:** דירוג שמתעדכן לפי פידבק, ספי חריגה שמתכווננים, וסיבות דחייה שהופכות לזיכרון.
 
 ## הרצה
-ההוראות ב-[README.md](README.md). בקצרה: `uvicorn distill.api:app` ב-backend ו-`npm run dev` ב-frontend,
-ואז **Load the demo company**.
+ההוראות ב-[README.md](README.md). בקצרה: `docker compose up --build` מעלה את המערכת מקצה לקצה עם PostgreSQL אמיתי
+ב-http://localhost:8000, ואז **Load the demo company**. בלי Docker: `uvicorn distill.api:app` ב-backend
+ו-`npm run dev` ב-frontend.

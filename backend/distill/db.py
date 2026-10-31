@@ -165,9 +165,17 @@ _engine = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
+def normalize_url(url: str) -> str:
+    """Accept the plain postgres:// and postgresql:// forms that hosting providers hand out."""
+    for plain in ("postgres://", "postgresql://"):
+        if url.startswith(plain):
+            return "postgresql+psycopg://" + url[len(plain):]
+    return url
+
+
 def init_db(url: str | None = None) -> sessionmaker[Session]:
     global _engine, _SessionLocal
-    url = url or os.environ.get("DISTILL_DATABASE_URL", "sqlite:///./distill.db")
+    url = normalize_url(url or os.environ.get("DISTILL_DATABASE_URL", "sqlite:///./distill.db"))
     kwargs: dict[str, Any] = {}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
