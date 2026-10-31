@@ -14,4 +14,4 @@ ENV DISTILL_DATABASE_URL=sqlite:////data/distill.db
 VOLUME /data
 WORKDIR /app/backend
 EXPOSE 8000
-CMD ["uvicorn", "distill.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn distill.api:app --host 0.0.0.0 --port ${PORT:-8000}"]

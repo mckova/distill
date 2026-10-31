@@ -79,9 +79,14 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 `DISTILL_SCHEDULER=0` turns off the background scheduler. `DISTILL_DATABASE_URL` accepts SQLite or PostgreSQL
 (`postgresql://user:pass@host/db`).
 
+## Hosted demo
+`DISTILL_DEMO=1` makes the server load the demo company on boot and label the AI features "Demo mode": answers and the
+agent review are assembled from the ranked findings until `ANTHROPIC_API_KEY` is set. `render.yaml` describes a
+free single-container deployment (the Dockerfile builds the UI and serves it with the API; SQLite in a temp directory).
+
 ## Tests
 ```bash
-cd backend && pytest     # 33 tests
+cd backend && pytest     # 34 tests
 ```
 They include statistical contracts (the segment-driver detector must find the planted effect in at least 17 of
 20 random companies with at most 5 spurious findings), offline tests of the agent loop, multi-turn chat, memory,

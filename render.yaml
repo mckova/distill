@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: distill-demo
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/ai
+    envVars:
+      - key: DISTILL_DEMO
+        value: "1"
+      - key: DISTILL_SCHEDULER
+        value: "0"
+      - key: DISTILL_DATABASE_URL
+        value: sqlite:////tmp/distill.db

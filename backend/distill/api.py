@@ -24,6 +24,13 @@ app = FastAPI(title="Distill", version="1.0.0",
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+def demo_mode() -> bool:
+    """DISTILL_DEMO=1: seed the demo company on boot and run the AI features in a labelled offline mode."""
+    import os
+
+    return os.environ.get("DISTILL_DEMO") == "1"
+
+
 @app.on_event("startup")
 def _startup() -> None:
     import os
@@ -31,6 +38,11 @@ def _startup() -> None:
     from . import scheduler
 
     init_db()
+    if demo_mode():
+        # A hosted demo starts with the demo company already loaded, so a visitor lands on real findings.
+        with get_session() as s:
+            if not s.scalar(select(Source)):
+                demo(s)
     if os.environ.get("DISTILL_SCHEDULER", "1") != "0":
         scheduler.start()
 
@@ -343,7 +355,7 @@ def ask(body: AskIn, s: Session = Depends(db)) -> dict[str, Any]:
 
 @app.get("/api/ai")
 def ai_status() -> dict[str, Any]:
-    return {"enabled": agent.client_or_none() is not None, "model": agent.MODEL,
+    return {"enabled": agent.client_or_none() is not None, "demo": demo_mode(), "model": agent.MODEL,
             "capabilities": ["copilot agent with 10 tools", "autopilot daily review", "root-cause investigation",
                              "AI data glossary", "AI-written skills", "company memory", "executive digest"]}
 
@@ -417,6 +429,12 @@ def run_autopilot(s: Session = Depends(db)) -> dict[str, Any]:
     """The AI reviews all findings, investigates the most valuable, sets up (disabled) automations, and briefs."""
     import anthropic
 
+    if agent.client_or_none() is None and demo_mode():
+        # No key on a hosted demo: a template briefing from the ranked findings, labelled as such.
+        b = Briefing(text=narrator.fallback_digest(list_insights(s=s)), steps=[], engine="demo")
+        s.add(b)
+        s.commit()
+        return {"id": b.id, "text": b.text, "steps": b.steps, "engine": b.engine, "created_at": b.created_at}
     _ai_or_503()
     try:
         result = agent.autopilot(s)

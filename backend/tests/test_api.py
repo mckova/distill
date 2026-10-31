@@ -108,3 +108,22 @@ def test_postgres_urls_are_normalised():
     assert normalize_url("postgresql://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
     assert normalize_url("postgresql+psycopg://u@h/db") == "postgresql+psycopg://u@h/db"
     assert normalize_url("sqlite:///x.db") == "sqlite:///x.db"
+
+
+def test_demo_mode_seeds_on_boot_and_briefs_without_a_key(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from distill import agent
+    from distill.api import app
+
+    monkeypatch.setenv("DISTILL_DEMO", "1")
+    monkeypatch.setenv("DISTILL_SCHEDULER", "0")
+    monkeypatch.setenv("DISTILL_DATABASE_URL", f"sqlite:///{tmp_path}/boot.db")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(agent, "client_or_none", lambda: None)
+    with TestClient(app) as c:
+        assert c.get("/api/ai").json()["demo"] is True
+        assert len(c.get("/api/insights").json()) >= 8       # seeded before any request
+        b = c.post("/api/autopilot").json()
+        assert b["engine"] == "demo" and b["text"]

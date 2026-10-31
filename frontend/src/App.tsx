@@ -56,9 +56,9 @@ export default function App() {
           ))}
         </nav>
         <div className="topright">
-          <span className={ai?.enabled ? "status on" : "status"} title={ai?.capabilities.join(", ")}>
+          <span className={ai?.enabled || ai?.demo ? "status on" : "status"} title={ai?.capabilities.join(", ")}>
             <span className="status-dot" aria-hidden />
-            {ai ? (ai.enabled ? "Claude connected" : "Claude not connected") : "Checking…"}
+            {ai ? (ai.enabled ? "Claude connected" : ai.demo ? "Demo mode" : "Claude not connected") : "Checking…"}
           </span>
           <form className="search" role="search" onSubmit={(e) => {
             e.preventDefault();

@@ -3,7 +3,7 @@ import { ArrowUp } from "lucide-react";
 import { api, type Briefing, type Conversation, type Turn } from "./api";
 import { Header, Md, Skeleton, Steps, timeAgo, useAsync } from "./ui";
 
-export type AiInfo = { enabled: boolean; model: string; capabilities: string[] };
+export type AiInfo = { enabled: boolean; demo?: boolean; model: string; capabilities: string[] };
 
 const SUGGESTIONS = [
   "Why did orders in the North region drop, and since when?",
@@ -68,7 +68,9 @@ export function Ask({ ai, notify, initial }: { ai: AiInfo | null; notify: (m: st
         <div className="chat-col">
           <Header title="Ask" sub={live
             ? "Questions go to a Claude agent that runs aggregate queries on your data, reads the findings and process maps, and remembers what you tell it."
-            : "Claude is not connected, so answers come from the ranked findings only. Set ANTHROPIC_API_KEY on the server for the full agent."} />
+            : ai?.demo
+              ? "Demo mode: answers come from the ranked findings. With ANTHROPIC_API_KEY set, a Claude agent runs aggregate queries on the data and remembers what you tell it."
+              : "Claude is not connected, so answers come from the ranked findings only. Set ANTHROPIC_API_KEY on the server for the full agent."} />
         </div>
         <div className="thread" aria-live="polite">
           <div className="chat-col">
@@ -129,9 +131,11 @@ export function AgentBriefing({ ai, notify, onDone }: { ai: AiInfo | null; notif
       {!running && !latest && (
         <p className="muted small">{ai?.enabled
           ? "The agent reviews every finding, investigates the ones worth money, drafts automations for you to approve, and writes up what it found."
-          : <>Connect Claude by setting <code>ANTHROPIC_API_KEY</code> on the server. Everything else works without it.</>}</p>
+          : ai?.demo
+            ? "Demo mode: the review is assembled from the ranked findings. With a Claude key set, the agent investigates, drafts automations and writes it up itself."
+            : <>Connect Claude by setting <code>ANTHROPIC_API_KEY</code> on the server. Everything else works without it.</>}</p>
       )}
-      <button className={latest ? "ghost" : "primary"} disabled={!ai?.enabled || running} onClick={async () => {
+      <button className={latest ? "ghost" : "primary"} disabled={!(ai?.enabled || ai?.demo) || running} onClick={async () => {
         setRunning(true);
         try { await api.autopilot(); briefings.reload(); onDone(); notify("Agent review finished"); }
         catch (e) { notify(String((e as Error).message)); } finally { setRunning(false); }
