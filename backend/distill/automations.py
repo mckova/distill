@@ -163,6 +163,15 @@ def compile_insight(insight: dict[str, Any], profile: dict[str, Any], stats: dic
         steps = ["Call the evaluate endpoint every 6 hours.", "Send the follow-up template to each listed case.",
                  "Review which missing fields trigger loops and add them to the intake form."]
         minutes = 40
+    elif kind == "data_quality" and ev.get("check"):
+        check = ev["check"]
+        rule = {"type": "quality_guard", "check": check, "column": ev.get("column"),
+                "max_null_ratio": 0.05, "every_hours": 24}
+        name = f"Data quality guard: {check.replace('_', ' ')}" + (f" on {ev['column']}" if ev.get("column") else "")
+        desc = "Runs after every sync and alerts the data owner before bad records reach reports."
+        steps = ["Call the evaluate endpoint after each sync.", "If triggered, notify the owner of the source system.",
+                 "Block downstream reports for this dataset until the count returns to zero."]
+        minutes = 20
     else:
         return None
     return {"name": name, "kind": rule["type"], "rule": rule, "description": desc, "steps": steps,
@@ -231,4 +240,23 @@ def evaluate(rule: dict[str, Any], df: pd.DataFrame, thresholds: dict[str, float
         n = act["frequency"] if act else 0
         return {"triggered": False, "message": f"Bot would have handled {n} '{rule['replaces_activity']}' steps",
                 "details": {"handled": n}}
+    if t == "quality_guard":
+        col, check = rule.get("column"), rule["check"]
+        if check == "duplicate_rows":
+            n = int(df.astype(str).duplicated().sum())
+            return {"triggered": n > 0, "message": f"{n} duplicate rows", "details": {"duplicates": n}}
+        if check == "duplicate_key":
+            n = int(len(df) - df[col].nunique())
+            return {"triggered": n > 0, "message": f"{n} repeated values in key '{col}'", "details": {"duplicates": n}}
+        if check == "nulls":
+            r = float(df[col].isna().mean())
+            return {"triggered": r > rule["max_null_ratio"], "message": f"'{col}' empty in {r:.0%} of rows",
+                    "details": {"null_ratio": round(r, 4)}}
+        if check == "range":
+            n = int((pd.to_numeric(df[col], errors="coerce") < 0).sum())
+            return {"triggered": n > 0, "message": f"{n} negative values in '{col}'", "details": {"rows": n}}
+        if check == "future":
+            t = pd.to_datetime(df[col], utc=True, format="mixed", errors="coerce")
+            n = int((t > pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)).sum())
+            return {"triggered": n > 0, "message": f"{n} records dated in the future", "details": {"rows": n}}
     raise ValueError(f"unknown rule type {t}")

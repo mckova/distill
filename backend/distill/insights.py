@@ -303,6 +303,50 @@ def process_insights(df: pd.DataFrame, roles: dict[str, Any], **_: Any) -> list[
     return findings
 
 
+# --------------------------------------------------------------------------- data quality (all roles)
+
+def data_quality(df: pd.DataFrame, roles: dict[str, Any], fields: list[dict[str, Any]], **_: Any) -> list[Finding]:
+    """Processing checks that run before anyone trusts the numbers: duplicates, gaps, impossible values."""
+    findings: list[Finding] = []
+    n = len(df)
+    dup_rows = int(df.astype(str).duplicated().sum())
+    if dup_rows:
+        findings.append(Finding(
+            "data_quality", "duplicate_rows", f"{dup_rows} exact duplicate rows ({dup_rows / n:.1%} of the data)",
+            "Identical records usually come from a double export or a retrying integration. They inflate every "
+            "count and sum. Distill keeps them for traceability; fix the source or de-duplicate before reporting.",
+            min(1.0, 0.3 + dup_rows / n * 20), {"check": "duplicate_rows", "rows": dup_rows, "share": round(dup_rows / n, 4), "chart": None}))
+    for f in fields:
+        col = f["name"]
+        if f["semantic_type"] == "ID" and f["kind"] != "number" and 0.9 < f["cardinality_ratio"] < 1 and col.endswith("id"):
+            dups = int(n - df[col].nunique())
+            findings.append(Finding(
+                "data_quality", f"dup_key:{col}", f"'{col}' should be unique but repeats {dups} times",
+                f"{col} looks like a primary key ({f['cardinality_ratio']:.1%} distinct). Repeated keys break joins "
+                "and double-count downstream.", min(1.0, 0.3 + dups / n * 20), {"check": "duplicate_key", "column": col, "duplicates": dups, "chart": None}))
+        if 0.15 <= f["null_ratio"] < 1:
+            findings.append(Finding(
+                "data_quality", f"nulls:{col}", f"'{col}' is empty in {f['null_ratio']:.0%} of rows",
+                "Missing values silently drop rows from segment analysis. Make the field required at the source "
+                "or define a default.", min(1.0, f["null_ratio"]), {"check": "nulls", "column": col, "null_ratio": f["null_ratio"], "chart": None}))
+        if f["semantic_type"] in ("Money", "Quantity") and f.get("min", 0) < 0:
+            neg = int((pd.to_numeric(df[col], errors="coerce") < 0).sum())
+            findings.append(Finding(
+                "data_quality", f"negative:{col}", f"{neg} negative values in '{col}'",
+                "Negative amounts are usually refunds or entry errors. Model refunds explicitly so revenue isn't understated.",
+                min(1.0, 0.3 + neg / n * 10), {"check": "range", "column": col, "rows": neg, "chart": None}))
+    time = roles.get("time")
+    if time:
+        t = pd.to_datetime(df[time], utc=True, format="mixed", errors="coerce")
+        future = int((t > pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)).sum())
+        if future:
+            findings.append(Finding(
+                "data_quality", f"future:{time}", f"{future} records dated in the future",
+                f"'{time}' has values after today. Check time zones and date formats at the source.",
+                0.5, {"check": "future", "column": time, "rows": future, "chart": None}))
+    return findings
+
+
 TEMPLATES: dict[str, list[Callable[..., list[Finding]]]] = {
     "TransactionTable": [trend, segment_drivers, anomalies, concentration, correlations],
     "TimeSeriesTable": [trend, segment_drivers, anomalies, correlations],
@@ -316,6 +360,6 @@ def analyze(df: pd.DataFrame, profile: dict[str, Any], thresholds: dict[str, flo
         return []
     ctx = {"roles": profile.get("roles", {}), "fields": profile.get("fields", []), "thresholds": thresholds or {}}
     out: list[Finding] = []
-    for template in TEMPLATES.get(profile.get("role", "GenericTable"), []):
+    for template in [data_quality, *TEMPLATES.get(profile.get("role", "GenericTable"), [])]:
         out.extend(template(df, **ctx))
     return out

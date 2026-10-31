@@ -63,13 +63,18 @@ def _tune_threshold(session: Session, metric: str, useful: bool) -> float:
     return z
 
 
-def record_feedback(session: Session, insight: Insight, useful: bool) -> dict[str, float]:
+def record_feedback(session: Session, insight: Insight, useful: bool, reason: str | None = None) -> dict[str, float]:
     a = arm(session, arm_key(insight.kind))
     if useful:
         a.alpha += 1
     else:
         a.beta += 1
     insight.status = "useful" if useful else "dismissed"
+    if reason and reason.strip():  # free-text feedback becomes company memory the AI reads on every run
+        from .db import Memory
+
+        verdict = "useful" if useful else "not useful"
+        session.add(Memory(source="feedback", text=f"User rated '{insight.title}' ({insight.kind}) {verdict}: {reason.strip()[:300]}"))
     out = {"alpha": a.alpha, "beta": a.beta, "posterior_mean": round(a.alpha / (a.alpha + a.beta), 3)}
     if insight.kind == "anomaly":
         out["new_threshold"] = _tune_threshold(session, insight.evidence.get("metric", "count"), useful)

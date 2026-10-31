@@ -118,3 +118,26 @@ def learning_summary(session: Session) -> dict[str, Any]:
     return {"arms": sorted(arms, key=lambda a: -a["posterior_mean"]), "thresholds": th,
             "automations_enabled": sum(a.enabled for a in autos),
             "minutes_saved_per_week": round(sum(a.est_minutes_saved_per_week for a in autos if a.enabled), 1)}
+
+
+def refresh_intelligence(session: Session, datasets: list[Dataset]) -> int:
+    """After new data lands: AI glossary (if missing), statistical analysis, then skills regeneration."""
+    import anthropic
+
+    from .agent import client_or_none, glossary
+    from .skills import generate_skills
+
+    ai = client_or_none() is not None
+    found = 0
+    for ds in datasets:
+        if ai and ds.row_count and not ds.profile.get("glossary"):
+            try:
+                g = glossary(ds.profile, ds.stream)
+            except anthropic.APIError:
+                g = None
+            if g:
+                ds.profile = {**ds.profile, "glossary": g}
+                session.commit()
+        found += len(analyze_dataset(session, ds))
+    generate_skills(session, use_ai=ai)
+    return found

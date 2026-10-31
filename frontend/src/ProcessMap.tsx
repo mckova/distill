@@ -39,7 +39,7 @@ export function ProcessMap({ model, minProbability = 0.04 }: { model: Json; minP
   return (
     <div className="process-wrap">
       <div className="legend">
-        <span className="key s1" />Hand-off (width = cases)
+        <span className="key edge-key" />Hand-off (width = cases)
         <span className="key warn" />Bottleneck
         <span className="key auto" />Automation candidate
       </div>

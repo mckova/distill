@@ -7,6 +7,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DISTILL_DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("DISTILL_SCHEDULER", "0")
     from distill.api import app
 
     with TestClient(app) as c:

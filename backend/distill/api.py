@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from . import agent, narrator, service
 from .connectors.sources import REGISTRY, build
-from .db import Automation, Dataset, Insight, Source, SyncRun, get_session, init_db
+from .db import Automation, Briefing, Conversation, Dataset, Insight, Memory, Skill, Source, SyncRun, get_session, init_db
 from .ingest import append_records, get_or_create_dataset, load_frame, refresh_profile, sync_source
 from .learning import record_feedback
 
@@ -26,7 +26,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.on_event("startup")
 def _startup() -> None:
+    import os
+
+    from . import scheduler
+
     init_db()
+    if os.environ.get("DISTILL_SCHEDULER", "1") != "0":
+        scheduler.start()
 
 
 def db() -> Iterator[Session]:
@@ -91,6 +97,16 @@ class SourceIn(BaseModel):
 
 class FeedbackIn(BaseModel):
     useful: bool
+    reason: str | None = None
+
+
+class ChatIn(BaseModel):
+    message: str
+    conversation_id: int | None = None
+
+
+class MemoryIn(BaseModel):
+    text: str
 
 
 class ToggleIn(BaseModel):
@@ -144,7 +160,7 @@ async def upload_source(name: str = Form(...), stream: str = Form(...), cursor_f
 def delete_source(source_id: int, s: Session = Depends(db)) -> None:
     src = _404(s.get(Source, source_id), "source")
     for ds in src.datasets:
-        for model in (Automation, Insight):
+        for model in (Automation, Skill, Insight):
             for row in s.scalars(select(model).where(model.dataset_id == ds.id)):
                 s.delete(row)
     for run in s.scalars(select(SyncRun).where(SyncRun.source_id == source_id)):
@@ -165,7 +181,7 @@ def _sync_and_analyze(s: Session, src: Source) -> dict[str, Any]:
         run = sync_source(s, src)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"sync failed: {exc}") from exc
-    found = sum(len(service.analyze_dataset(s, ds)) for ds in src.datasets)
+    found = service.refresh_intelligence(s, list(src.datasets))
     return {"source": source_out(src), "run": {"id": run.id, "status": run.status, "records": run.records},
             "insights": found}
 
@@ -252,7 +268,7 @@ def list_insights(dataset_id: int | None = None, status: str | None = None, incl
 @app.post("/api/insights/{insight_id}/feedback")
 def feedback(insight_id: int, body: FeedbackIn, s: Session = Depends(db)) -> dict[str, Any]:
     i = _404(s.get(Insight, insight_id), "insight")
-    return {"insight": insight_out(i), "learning": record_feedback(s, i, body.useful)}
+    return {"insight": insight_out(i), "learning": record_feedback(s, i, body.useful, body.reason)}
 
 
 @app.post("/api/insights/{insight_id}/automate", status_code=201)
@@ -328,7 +344,8 @@ def ask(body: AskIn, s: Session = Depends(db)) -> dict[str, Any]:
 @app.get("/api/ai")
 def ai_status() -> dict[str, Any]:
     return {"enabled": agent.client_or_none() is not None, "model": agent.MODEL,
-            "capabilities": ["analyst agent with tools", "root-cause investigation", "skill authoring", "digest"]}
+            "capabilities": ["copilot agent with 10 tools", "autopilot daily review", "root-cause investigation",
+                             "AI data glossary", "AI-written skills", "company memory", "executive digest"]}
 
 
 @app.post("/api/insights/{insight_id}/investigate")
@@ -347,6 +364,139 @@ def investigate(insight_id: int, s: Session = Depends(db)) -> dict[str, Any]:
                                                       "engine": result["engine"]}}
     s.commit()
     return insight_out(i)
+
+
+# --------------------------------------------------------------------------- copilot (multi-turn agent)
+
+def _ai_or_503() -> None:
+    if agent.client_or_none() is None:
+        raise HTTPException(503, "AI is not configured: set ANTHROPIC_API_KEY")
+
+
+def conversation_out(c: Conversation) -> dict[str, Any]:
+    return {"id": c.id, "title": c.title, "turns": c.turns, "created_at": c.created_at}
+
+
+@app.get("/api/conversations")
+def list_conversations(s: Session = Depends(db)) -> list[dict[str, Any]]:
+    return [{"id": c.id, "title": c.title, "created_at": c.created_at}
+            for c in s.scalars(select(Conversation).order_by(Conversation.id.desc()).limit(30))]
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: int, s: Session = Depends(db)) -> dict[str, Any]:
+    return conversation_out(_404(s.get(Conversation, conversation_id), "conversation"))
+
+
+@app.post("/api/chat")
+def chat(body: ChatIn, s: Session = Depends(db)) -> dict[str, Any]:
+    """One copilot turn. The full API transcript is persisted so follow-up questions keep context."""
+    import anthropic
+
+    _ai_or_503()
+    conv = s.get(Conversation, body.conversation_id) if body.conversation_id else None
+    if conv is None:
+        conv = Conversation(title=body.message[:120], messages=[], turns=[])
+        s.add(conv)
+        s.flush()
+    try:
+        result = agent.run_agent(s, body.message, history=list(conv.messages))
+    except anthropic.APIError as exc:
+        raise HTTPException(502, f"Claude API error: {exc}") from exc
+    conv.messages = result["messages"]
+    conv.turns = [*conv.turns, {"role": "user", "text": body.message},
+                  {"role": "assistant", "text": result["text"], "steps": result["steps"], "engine": result["engine"]}]
+    s.commit()
+    return conversation_out(conv)
+
+
+# --------------------------------------------------------------------------- autopilot
+
+@app.post("/api/autopilot", status_code=201)
+def run_autopilot(s: Session = Depends(db)) -> dict[str, Any]:
+    """The AI reviews all findings, investigates the most valuable, sets up (disabled) automations, and briefs."""
+    import anthropic
+
+    _ai_or_503()
+    try:
+        result = agent.autopilot(s)
+    except anthropic.APIError as exc:
+        raise HTTPException(502, f"Claude API error: {exc}") from exc
+    b = Briefing(text=result["text"], steps=result["steps"], engine=result["engine"])
+    s.add(b)
+    s.commit()
+    return {"id": b.id, "text": b.text, "steps": b.steps, "engine": b.engine, "created_at": b.created_at}
+
+
+@app.get("/api/briefings")
+def briefings(s: Session = Depends(db)) -> list[dict[str, Any]]:
+    return [{"id": b.id, "text": b.text, "steps": b.steps, "engine": b.engine, "created_at": b.created_at}
+            for b in s.scalars(select(Briefing).order_by(Briefing.id.desc()).limit(10))]
+
+
+# --------------------------------------------------------------------------- skills, optimization, memory
+
+def skill_out(k: Skill, full: bool = False) -> dict[str, Any]:
+    out = {"id": k.id, "slug": k.slug, "kind": k.kind, "dataset_id": k.dataset_id, "description": k.description,
+           "version": k.version, "author": k.author, "updated_at": k.updated_at}
+    if full:
+        out["content"] = k.content
+    return out
+
+
+@app.get("/api/skills")
+def list_skills(s: Session = Depends(db)) -> list[dict[str, Any]]:
+    return [skill_out(k) for k in s.scalars(select(Skill).order_by(Skill.kind, Skill.slug))]
+
+
+@app.post("/api/skills/generate")
+def regenerate_skills(s: Session = Depends(db)) -> list[dict[str, Any]]:
+    from .skills import generate_skills
+
+    return [skill_out(k) for k in generate_skills(s)]
+
+
+@app.get("/api/skills/export.zip")
+def export_skills(s: Session = Depends(db)) -> Response:
+    from .skills import bundle
+
+    data = bundle(list(s.scalars(select(Skill))))
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="distill-skills.zip"'})
+
+
+@app.get("/api/skills/{skill_id}")
+def get_skill(skill_id: int, s: Session = Depends(db)) -> dict[str, Any]:
+    return skill_out(_404(s.get(Skill, skill_id), "skill"), full=True)
+
+
+@app.get("/api/optimization")
+def optimization(s: Session = Depends(db)) -> dict[str, Any]:
+    from .optimization import opportunities
+
+    return opportunities(s)
+
+
+@app.get("/api/memory")
+def list_memory(s: Session = Depends(db)) -> list[dict[str, Any]]:
+    return [{"id": m.id, "text": m.text, "source": m.source, "created_at": m.created_at}
+            for m in s.scalars(select(Memory).order_by(Memory.id.desc()))]
+
+
+@app.post("/api/memory", status_code=201)
+def add_memory(body: MemoryIn, s: Session = Depends(db)) -> dict[str, Any]:
+    if not body.text.strip():
+        raise HTTPException(422, "empty note")
+    m = Memory(text=body.text.strip()[:500], source="user")
+    s.add(m)
+    s.commit()
+    return {"id": m.id, "text": m.text, "source": m.source, "created_at": m.created_at}
+
+
+@app.delete("/api/memory/{memory_id}", status_code=204)
+def delete_memory(memory_id: int, s: Session = Depends(db)) -> None:
+    s.delete(_404(s.get(Memory, memory_id), "memory"))
+    s.commit()
 
 
 # --------------------------------------------------------------------------- static frontend

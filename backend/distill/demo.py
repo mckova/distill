@@ -6,6 +6,7 @@ Planted ground truth (the test suite checks the engine finds each one):
     * one day (END - 37d) has a 4x order spike                         -> anomaly insight
     * the top ~10% of customers produce the majority of revenue       -> concentration insight
     * discount is negatively correlated with order amount            -> correlation insight
+    * 15 orders were exported twice                                  -> data-quality insight
   support_events (process log: case_id / activity / timestamp / resource)
     * "Triage" -> "Assign Agent" waits ~20 business hours              -> bottleneck insight
     * "Copy to CRM" is a short, manual, near-universal step           -> automation candidate
@@ -53,6 +54,9 @@ def _orders(rng: random.Random, days: int) -> list[dict[str, Any]]:
                 "amount": max(amount, 5.0), "discount": discount,
             })
             oid += 1
+    # planted data-quality issue: a retrying integration exported 15 orders twice
+    rows.extend(dict(r) for r in rng.sample(rows, 15))
+    rows.sort(key=lambda r: r["created_at"])
     return rows
 
 

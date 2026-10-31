@@ -31,7 +31,10 @@ def load_frame(session: Session, dataset_id: int) -> pd.DataFrame:
 def refresh_profile(session: Session, ds: Dataset) -> None:
     df = load_frame(session, ds.id)
     ds.row_count = len(df)
+    old_glossary = (ds.profile or {}).get("glossary")
     ds.profile = profile_frame(df)
+    if old_glossary and {c["name"] for c in old_glossary.get("columns", [])} >= {f["name"] for f in ds.profile["fields"]}:
+        ds.profile = {**ds.profile, "glossary": old_glossary}  # AI glossary survives re-syncs
     ds.updated_at = utcnow()
 
 

@@ -36,8 +36,23 @@ automations. Work like an analyst:
 - Prefer few, well-chosen queries. Aggregates only; you cannot see raw rows.
 - Only create an automation when the user asks for one or when you are investigating a finding
   and the fix is clearly a monitoring rule; automations are created disabled for human review.
+- Quantify impact in hours per week or revenue per week when you recommend something
+  (`list_opportunities` has the numbers).
+- When you learn a durable fact about this company (a preference, a known cause, a business rule),
+  save it with `remember` so future analyses use it. Don't save one-off numbers.
 - Answer in the language of the user's question. Be concise: lead with the answer, then the
   evidence as short bullets, then one recommended next action."""
+
+
+def system_prompt(session: Session) -> str:
+    """Base instructions + the company memory the system has accumulated (its long-term learning)."""
+    from .db import Memory
+
+    notes = list(session.scalars(select(Memory).order_by(Memory.id.desc()).limit(40)))
+    if not notes:
+        return SYSTEM
+    lines = "\n".join(f"- [{m.source}] {m.text}" for m in reversed(notes))
+    return f"{SYSTEM}\n\n## Company memory (learned from past feedback and analyses)\n{lines}"
 
 
 def _schema(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -76,6 +91,14 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _schema({"insight_id": {"type": "integer"}})},
     {"name": "run_automation", "description": "Evaluate an automation against current data now.",
      "input_schema": _schema({"automation_id": {"type": "integer"}})},
+    {"name": "list_opportunities",
+     "description": "Improvement opportunities ranked by impact (hours/week, revenue at risk/week) and the process what-if simulation.",
+     "input_schema": _schema({})},
+    {"name": "list_skills", "description": "Agent Skills generated from the company's data (SOPs, data context, playbooks).",
+     "input_schema": _schema({})},
+    {"name": "remember",
+     "description": "Save a durable fact about this company to long-term memory (preferences, confirmed causes, rules).",
+     "input_schema": _schema({"note": {"type": "string"}})},
 ]
 for _t in TOOLS:
     _t["strict"] = True
@@ -190,6 +213,27 @@ class Toolbox:
             raise ToolError(f"automation {automation_id} not found")
         return run_automation(self.s, a)
 
+    def list_opportunities(self) -> dict[str, Any]:
+        from .optimization import opportunities
+
+        return opportunities(self.s)
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        from .db import Skill
+
+        return [{"slug": k.slug, "kind": k.kind, "description": k.description, "version": k.version}
+                for k in self.s.scalars(select(Skill))]
+
+    def remember(self, note: str) -> dict[str, Any]:
+        from .db import Memory
+
+        note = note.strip()[:500]
+        if not note:
+            raise ToolError("empty note")
+        self.s.add(Memory(text=note, source="agent"))
+        self.s.commit()
+        return {"saved": True}
+
     def call(self, name: str, args: dict[str, Any]) -> Any:
         fn: Callable[..., Any] | None = getattr(self, name, None) if name in {t["name"] for t in TOOLS} else None
         if fn is None:
@@ -213,24 +257,35 @@ def _create(client: Any, **kwargs: Any) -> Any:
                                        **kwargs)
 
 
-def run_agent(session: Session, prompt: str, client: Any | None = None, effort: str = "medium") -> dict[str, Any]:
-    """Run the tool loop. Returns the final answer plus a trace of every tool call (shown in the UI)."""
+def _block_to_dict(b: Any) -> dict[str, Any]:
+    """Persistable copy of a content block, passed back to the API unchanged (thinking blocks included)."""
+    if hasattr(b, "model_dump"):
+        return b.model_dump(mode="json", exclude_none=True)
+    return {k: v for k, v in vars(b).items() if v is not None}
+
+
+def run_agent(session: Session, prompt: str, client: Any | None = None, effort: str = "medium",
+              history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Run the tool loop. `history` (append-only API transcript) makes it multi-turn.
+
+    Returns the final answer, a trace of every tool call (shown in the UI) and the updated transcript."""
     client = client or client_or_none()
     if client is None:
-        return {"text": None, "engine": "unavailable", "steps": []}
+        return {"text": None, "engine": "unavailable", "steps": [], "messages": history or []}
     tools = Toolbox(session)
-    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    system = system_prompt(session)
+    messages: list[dict[str, Any]] = [*(history or []), {"role": "user", "content": prompt}]
     steps: list[dict[str, Any]] = []
     for _ in range(MAX_STEPS):
-        resp = _create(client, max_tokens=16000, system=SYSTEM, tools=TOOLS, messages=messages,
+        resp = _create(client, max_tokens=16000, system=system, tools=TOOLS, messages=messages,
                        output_config={"effort": effort})
         if resp.stop_reason == "refusal":
-            return {"text": "The model declined this request.", "engine": MODEL, "steps": steps}
-        messages.append({"role": "assistant", "content": resp.content})  # keep blocks verbatim (thinking included)
+            return {"text": "The model declined this request.", "engine": MODEL, "steps": steps, "messages": history or []}
+        messages.append({"role": "assistant", "content": [_block_to_dict(b) for b in resp.content]})
         calls = [b for b in resp.content if b.type == "tool_use"]
         if resp.stop_reason != "tool_use" or not calls:
             text = "".join(b.text for b in resp.content if b.type == "text").strip()
-            return {"text": text, "engine": getattr(resp, "model", MODEL), "steps": steps}
+            return {"text": text, "engine": getattr(resp, "model", MODEL), "steps": steps, "messages": messages}
         results = []
         for call in calls:
             try:
@@ -244,8 +299,60 @@ def run_agent(session: Session, prompt: str, client: Any | None = None, effort: 
             results.append({"type": "tool_result", "tool_use_id": call.id, "is_error": is_error,
                             "content": json.dumps(out, default=str, ensure_ascii=False)})
         messages.append({"role": "user", "content": results})  # all results in one message
-    return {"text": "Stopped after the maximum number of steps; partial findings are in the trace.",
-            "engine": MODEL, "steps": steps}
+    messages[-1]["content"].append({"type": "text", "text": "Step budget reached: stop using tools and summarise what you found."})
+    resp = _create(client, max_tokens=4000, system=system, messages=messages, tools=TOOLS,
+                   output_config={"effort": "low"})
+    messages.append({"role": "assistant", "content": [_block_to_dict(b) for b in resp.content]})
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    return {"text": text or "Stopped after the maximum number of steps.", "engine": MODEL, "steps": steps,
+            "messages": messages}
+
+
+AUTOPILOT = """Run your daily review of this company's data, like a senior analyst starting their morning.
+1. Read the ranked findings and the improvement opportunities.
+2. Pick the 2-3 findings with the highest business impact and investigate each with queries until you
+   can state a cause or a best-supported hypothesis.
+3. For each one where a monitoring rule or bot clearly helps, create the automation (it stays disabled
+   until a human approves it).
+4. Save anything durable you learned with `remember`.
+Finish with a briefing: Headline (one sentence), then for each finding: what happened, why, impact per
+week, what you set up. End with the decisions you need from a human."""
+
+
+def autopilot(session: Session, client: Any | None = None) -> dict[str, Any]:
+    return run_agent(session, AUTOPILOT, client=client, effort="high")
+
+
+GLOSSARY_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["summary", "columns"],
+    "properties": {
+        "summary": {"type": "string", "description": "one sentence: what business activity this table records"},
+        "columns": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["name", "meaning"],
+            "properties": {"name": {"type": "string"}, "meaning": {"type": "string"}}}},
+    },
+}
+
+
+def glossary(profile: dict[str, Any], stream: str, client: Any | None = None) -> dict[str, Any] | None:
+    """AI data understanding: a business glossary for a table from its fingerprint (no raw rows)."""
+    client = client or client_or_none()
+    if client is None:
+        return None
+    fields = [{k: f.get(k) for k in ("name", "semantic_type", "kind", "distinct", "min", "max", "top")}
+              for f in profile.get("fields", [])]
+    resp = _create(client, max_tokens=4000, output_config={"effort": "low", "format": {"type": "json_schema",
+                   "schema": GLOSSARY_SCHEMA}},
+                   messages=[{"role": "user", "content": f"Table `{stream}`, role {profile.get('role')}. "
+                              f"Column fingerprints:\n{json.dumps(fields, default=str)}\n"
+                              "Explain in business terms what each column means."}])
+    if resp.stop_reason == "refusal":
+        return None
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
 
 
 def _summarize(out: Any) -> str:

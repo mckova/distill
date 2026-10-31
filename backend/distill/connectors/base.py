@@ -1,8 +1,7 @@
 """Connector protocol.
 
 A connector is four verbs (spec / check / discover / read) and `read`
-yields a stream of typed messages (RECORD, STATE, LOG), in the style of the
-Airbyte protocol. The engine never knows connector internals; it only
+yields a stream of typed messages (RECORD, STATE, LOG). The engine never knows connector internals; it only
 consumes messages. STATE messages carry an incremental cursor per stream so
 the next sync resumes where the last one stopped. Connectors run in-process
 as plain Python classes.

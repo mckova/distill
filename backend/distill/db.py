@@ -18,7 +18,7 @@ class Base(DeclarativeBase):
 
 
 class Source(Base):
-    """A configured connector instance (Airbyte calls this a 'source')."""
+    """A configured connector instance: kind + config + saved incremental state."""
 
     __tablename__ = "sources"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -111,6 +111,54 @@ class Setting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(160), primary_key=True)
     value: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+class Skill(Base):
+    """An Agent Skill generated from company data (process SOP, data context, or automation playbook)."""
+
+    __tablename__ = "skills"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(80), unique=True)
+    kind: Mapped[str] = mapped_column(String(30))  # sop | data_context | automation
+    dataset_id: Mapped[int | None] = mapped_column(ForeignKey("datasets.id"), nullable=True)
+    description: Mapped[str] = mapped_column(String(400))
+    content: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    source_hash: Mapped[str] = mapped_column(String(64), default="")
+    author: Mapped[str] = mapped_column(String(40), default="template")  # template | model id
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Memory(Base):
+    """Company memory: durable facts the AI learns (from feedback, investigations, or the user)."""
+
+    __tablename__ = "memories"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(40))  # feedback | agent | user
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Conversation(Base):
+    """Multi-turn copilot conversation. `messages` holds the exact API transcript (append-only)."""
+
+    __tablename__ = "conversations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    messages: Mapped[list[Any]] = mapped_column(default=list)
+    turns: Mapped[list[Any]] = mapped_column(default=list)  # UI view: [{role, text, steps}]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Briefing(Base):
+    """Output of an autopilot run: what the AI triaged, investigated and proposed."""
+
+    __tablename__ = "briefings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    steps: Mapped[list[Any]] = mapped_column(default=list)
+    engine: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 _engine = None

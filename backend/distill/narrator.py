@@ -49,12 +49,12 @@ def _ask(client: Any, prompt: str) -> str | None:
 def fallback_digest(insights: list[dict[str, Any]]) -> str:
     if not insights:
         return "No findings yet. Connect a source and run an analysis."
-    lines = ["Top findings this run:"]
+    lines = ["**Top findings this run**", ""]
     for i in insights[:5]:
-        lines.append(f"• {i['title']}")
+        lines.append(f"- {i['title']}")
     autos = [i for i in insights if i["kind"] in ("automation_candidate", "bottleneck")]
     if autos:
-        lines.append(f"Suggested next action: automate the fix for \"{autos[0]['title']}\".")
+        lines += ["", f"**Suggested next action:** automate the fix for \"{autos[0]['title']}\"."]
     return "\n".join(lines)
 
 
@@ -85,7 +85,7 @@ def answer(question: str, insights: list[dict[str, Any]], session: Any = None) -
     words = {w.lower().strip("?.,!") for w in question.split() if len(w) > 2}
     hits = [i for i in insights if words & set(i["title"].lower().replace("'", " ").split())]
     if hits:
-        return {"text": "Related findings:\n" + "\n".join(f"• {h['title']}" for h in hits[:5]), "engine": "keyword",
+        return {"text": "**Related findings**\n\n" + "\n".join(f"- {h['title']}" for h in hits[:5]), "engine": "keyword",
                 "steps": []}
-    return {"text": "Set ANTHROPIC_API_KEY to let the analyst agent answer free-form questions. Meanwhile:\n"
+    return {"text": "Set ANTHROPIC_API_KEY to let the analyst agent answer free-form questions. Meanwhile:\n\n"
             + fallback_digest(insights), "engine": "template", "steps": []}
