@@ -1,0 +1,136 @@
+"""Persistence layer: SQLAlchemy 2.0 ORM on SQLite by default, Postgres via DISTILL_DATABASE_URL."""
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Base(DeclarativeBase):
+    type_annotation_map = {dict[str, Any]: JSON, list[Any]: JSON}
+
+
+class Source(Base):
+    """A configured connector instance (Airbyte calls this a 'source')."""
+
+    __tablename__ = "sources"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(40))  # csv | json | rest | sql | demo
+    config: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    state: Mapped[dict[str, Any]] = mapped_column(default=dict)  # incremental cursors per stream
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    datasets: Mapped[list["Dataset"]] = relationship(back_populates="source", cascade="all, delete-orphan")
+
+
+class Dataset(Base):
+    """One stream materialised from a source."""
+
+    __tablename__ = "datasets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    stream: Mapped[str] = mapped_column(String(120))
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    profile: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    source: Mapped[Source] = relationship(back_populates="datasets")
+    records: Mapped[list["Record"]] = relationship(back_populates="dataset", cascade="all, delete-orphan")
+
+
+class Record(Base):
+    __tablename__ = "records"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id"), index=True)
+    data: Mapped[dict[str, Any]] = mapped_column()
+    emitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    dataset: Mapped[Dataset] = relationship(back_populates="records")
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    status: Mapped[str] = mapped_column(String(20))
+    records: Mapped[int] = mapped_column(Integer, default=0)
+    log: Mapped[list[Any]] = mapped_column(default=list)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Insight(Base):
+    __tablename__ = "insights"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)  # dedupe across re-analysis
+    kind: Mapped[str] = mapped_column(String(40))
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text)
+    severity: Mapped[float] = mapped_column(Float)  # 0..1 statistical strength
+    score: Mapped[float] = mapped_column(Float, default=0.0)  # learned rank score
+    evidence: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="new")  # new | useful | dismissed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Automation(Base):
+    __tablename__ = "automations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    insight_id: Mapped[int | None] = mapped_column(ForeignKey("insights.id"), nullable=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id"))
+    name: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(40))  # alert | process | report
+    rule: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    n8n_workflow: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    skill_md: Mapped[str] = mapped_column(Text, default="")
+    est_minutes_saved_per_week: Mapped[float] = mapped_column(Float, default=0.0)
+    enabled: Mapped[bool] = mapped_column(default=False)
+    runs: Mapped[list[Any]] = mapped_column(default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LearningArm(Base):
+    """Beta(alpha, beta) posterior per insight kind: the learned prior of 'is this kind useful here'."""
+
+    __tablename__ = "learning_arms"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(120), unique=True)
+    alpha: Mapped[float] = mapped_column(Float, default=1.0)
+    beta: Mapped[float] = mapped_column(Float, default=1.0)
+
+
+class Setting(Base):
+    """Per-metric adaptive parameters (e.g. anomaly z-threshold tuned from feedback)."""
+
+    __tablename__ = "settings"
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(default=dict)
+
+
+_engine = None
+_SessionLocal: sessionmaker[Session] | None = None
+
+
+def init_db(url: str | None = None) -> sessionmaker[Session]:
+    global _engine, _SessionLocal
+    url = url or os.environ.get("DISTILL_DATABASE_URL", "sqlite:///./distill.db")
+    kwargs: dict[str, Any] = {}
+    if url.startswith("sqlite"):
+        kwargs["connect_args"] = {"check_same_thread": False}
+    _engine = create_engine(url, **kwargs)
+    Base.metadata.create_all(_engine)
+    _SessionLocal = sessionmaker(_engine, expire_on_commit=False)
+    return _SessionLocal
+
+
+def get_session() -> Session:
+    if _SessionLocal is None:
+        init_db()
+    assert _SessionLocal is not None
+    return _SessionLocal()
