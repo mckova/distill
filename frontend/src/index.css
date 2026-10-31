@@ -10,7 +10,7 @@
   color-scheme: light;
   --ink: #1a2a30;
   --ink-2: #4d5f65;
-  --ink-3: #72838a;
+  --ink-3: #55676e;
   --rule: rgb(26 42 48 / .09);
   --rule-strong: rgb(26 42 48 / .2);
   --accent: #24606d;
@@ -36,7 +36,7 @@
   --ground: #e9ecea;
   --shadow: 0 1px 0 rgb(255 255 255 / .8) inset, 0 12px 40px rgb(30 45 50 / .07);
   --float: 0 1px 0 rgb(255 255 255 / .6) inset, 0 20px 60px -12px rgb(20 40 46 / .28);
-  --btn-grad: linear-gradient(180deg, rgb(61 133 147 / .94), rgb(36 96 109 / .97));
+  --btn-grad: linear-gradient(180deg, rgb(47 117 131 / .96), rgb(36 96 109 / .97));
   --btn-shadow: 0 1px 0 rgb(255 255 255 / .3) inset, 0 8px 20px rgb(36 96 109 / .25);
 
   --r-1: 8px; --r-2: 12px; --r-3: 18px; --r-4: 26px;
@@ -63,7 +63,7 @@
     color-scheme: dark;
     --ink: #e6efef;
     --ink-2: #aebdbf;
-    --ink-3: #809195;
+    --ink-3: #9aabaf;
     --rule: rgb(255 255 255 / .08);
     --rule-strong: rgb(255 255 255 / .2);
     --accent: #6fc0cf;
@@ -88,7 +88,7 @@
     --ground: #0f1719;
     --shadow: 0 1px 0 rgb(255 255 255 / .06) inset, 0 12px 40px rgb(0 0 0 / .35);
     --float: 0 0 0 1px rgb(255 255 255 / .08), 0 24px 60px -12px rgb(0 0 0 / .7);
-    --btn-grad: linear-gradient(180deg, rgb(77 161 176 / .95), rgb(47 112 126 / .98));
+    --btn-grad: linear-gradient(180deg, rgb(44 112 126 / .97), rgb(30 86 99 / .98));
     --btn-shadow: 0 1px 0 rgb(255 255 255 / .25) inset, 0 8px 20px rgb(0 0 0 / .35);
   }
 }

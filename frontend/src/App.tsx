@@ -211,8 +211,8 @@ function Home({ go, notify, bump, ai }: Ctx) {
 
 // --------------------------------------------------------------------------- findings (list + panel)
 
-function FindingDetail({ insight, notify, onChange, go }:
-  { insight: Insight; notify: (m: string) => void; onChange: () => void; go: Ctx["go"] }) {
+function FindingDetail({ insight, notify, onChange, go, live }:
+  { live: boolean; insight: Insight; notify: (m: string) => void; onChange: () => void; go: Ctx["go"] }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [reason, setReason] = useState("");
@@ -248,8 +248,8 @@ function FindingDetail({ insight, notify, onChange, go }:
             Turn into automation
           </button>
         )}
-        <button className="ghost" disabled={!!busy} onClick={() => act("inv", () => api.investigate(insight.id), "Investigation added")}>
-          {busy === "inv" ? "Investigating…" : inv ? "Investigate again" : "Investigate the cause"}</button>
+        {live && <button className="ghost" disabled={!!busy} onClick={() => act("inv", () => api.investigate(insight.id), "Investigation added")}>
+          {busy === "inv" ? "Investigating…" : inv ? "Investigate again" : "Investigate the cause"}</button>}
         {insight.status === "new" && <span className="push">
           <button className="ghost" disabled={!!busy} onClick={() => act("up", () => api.feedback(insight.id, true), "Noted. Findings like this will rank higher.")}>Useful</button>
           <button className="ghost" disabled={!!busy} onClick={() => setDismissing(true)}>Not useful</button>
@@ -287,7 +287,7 @@ function EvidenceFacts({ evidence }: { evidence: Json }) {
 }
 
 
-function Findings({ notify, go, focus }: Ctx) {
+function Findings({ notify, go, focus, ai }: Ctx) {
   const datasets = useAsync(api.datasets);
   const [showDismissed, setShowDismissed] = useState(false);
   const insights = useAsync(() => api.insights(showDismissed), [showDismissed]);
@@ -355,7 +355,7 @@ function Findings({ notify, go, focus }: Ctx) {
           {insights.data && list.length === 0 && <p className="muted">No findings of this type.</p>}
         </section>
         <div className="panel detail-panel">
-          {current ? <FindingDetail key={current.id} insight={current} notify={notify} onChange={reload} go={go} />
+          {current ? <FindingDetail key={current.id} insight={current} notify={notify} onChange={reload} go={go} live={!!ai?.enabled} />
             : insights.data && <p className="muted">Nothing selected.</p>}
         </div>
       </div>
